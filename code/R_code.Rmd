@@ -1,0 +1,853 @@
+---
+title: "Create Powerful Model Explanations with Logistic Regression"
+output:
+  github_document: default
+  html_document:
+    df_print: paged
+date: "2022-12-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Import Libraries
+```{r Import library}
+library(readxl)
+library(data.table)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(writexl)
+library(ggpubr)
+library(scales)
+library(plotly)
+library(officer)
+library(rvg)
+
+## for model fitting
+library(corrplot)
+library(DALEX)
+library(car)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+library(pdp)
+library(caret)
+library(randomForest)
+library(mlr)
+#library(xgboost)
+#library(SHAPforxgboost)
+
+```
+
+#     1 - Data Import and EDA
+
+## Set up and ingest data
+```{r set up data paths}
+
+data_raw <- read.csv('C:/Users/Jin/Documents/00_Machine_Learning/Logistic_Regression/Data/WA_Fn-UseC_-Telco-Customer-Churn.csv', header = TRUE)
+
+#str(data_raw)
+
+
+```
+
+## Map categorical columns
+```{r Data Transformation - Create Categorical Columns}
+
+setDT(data_raw)
+
+data_raw[, SeniorCitizen_Flag := case_when(
+                                 `SeniorCitizen` == 0 ~ "No",
+                                 `SeniorCitizen` == 1 ~ "Yes" 
+               
+                                 )]
+
+
+data_raw[, Churn_Flag := case_when(
+                                 `Churn` == "Yes" ~ TRUE,
+                                 `Churn` == "No" ~ FALSE 
+               
+                                 )]
+
+data_raw$Bundle_Flag <- as.factor(ifelse (data_raw$PhoneService == "Yes" & data_raw$InternetService != "No" ,"Yes","No"))
+
+```
+
+
+## Apply filters
+```{r Apply filters for Inforce vs. Churn}
+
+data_if    <- data_raw %>%
+  filter(`Churn` == "No")
+
+data_churn <- data_raw %>%
+  filter(`Churn` == "Yes")
+
+```
+
+
+
+
+
+
+## Density Plots for Continuous Variables
+
+
+
+### Monthly Charge
+```{r Density Plot for Monthly Charges}
+
+limit_prem <- 120
+
+den_prem <- ggplot() + 
+  geom_density(data = data_if, aes(x = data_if[["MonthlyCharges"]], y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6, color = NA) +
+  geom_density(data = data_churn, aes(x = data_churn[["MonthlyCharges"]], y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6, color = NA) +
+  
+#scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+scale_x_continuous(labels = comma, breaks = seq(0, limit_prem, 10) 
+  #                   , guide = guide_axis(n.dodge = 2)
+                   ) +
+scale_y_continuous(labels = percent, breaks=seq(0, 0.006, 0.001)) +
+
+  theme(
+        axis.title = element_blank(),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8)
+        ) +
+  labs(
+       #x = "Full Lapse Indicator", y = "Exposure %", 
+       title = "Distribution of Churn by Monthly Charges") +
+  #guides(fill = guide_legend("Full Lapse Indicator")) +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        #panel.grid.major.y = element_line(color = 'black', linetype = 'dotted'),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank() )
+
+
+box_prem <- ggplot(data_raw, aes(x = as.factor(data_raw[["Churn"]]), y = data_raw[["MonthlyCharges"]], fill = as.factor(data_raw[["Churn"]]))) + 
+  geom_boxplot(outlier.colour=NA, alpha = 0.6) +
+  scale_y_continuous(labels = comma, breaks=seq(0, limit_prem, 10)
+                     #, guide = guide_axis(n.dodge = 2)
+                     ) +
+  coord_cartesian(ylim = c(0, 200)) +
+  theme(legend.title = element_blank(),
+        legend.position = "none"
+        ) +
+  labs(x = "Churn") +
+        #x = "Full Lapse Indicator", y = "API", 
+        #title = "Distribution of Lapse by Premium") + 
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text.x = element_text(size = 8)
+        ) +
+  scale_fill_manual(values=c("#AAD8C8", "#2FB3B6")) +
+  stat_summary(fun = "mean", shape = 4, color = "#303E46")
+  
+
+
+ggr_prem_den <- ggarrange(den_prem, box_prem, widths = c(2.0, 0.7),
+          #labels = c("A", "B", "C"),
+          ncol = 2, nrow = 1)
+
+#dev.new()
+print(ggr_prem_den)
+
+```
+
+
+### Tenure (Months)
+```{r Density Plot for Tenure}
+
+limit_tenure <- 75
+
+den_tenure <- ggplot() + 
+  geom_density(data = data_if, aes(x = data_if[["tenure"]], y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6, color = NA) +
+  geom_density(data = data_churn, aes(x = data_churn[["tenure"]], y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6, color = NA) +
+  
+#scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+scale_x_continuous(labels = comma, breaks = seq(0, limit_tenure, 5) 
+  #                   , guide = guide_axis(n.dodge = 2)
+                   ) +
+scale_y_continuous(labels = percent, breaks=seq(0, 0.006, 0.001)) +
+
+  theme(
+        axis.title = element_blank(),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8)
+        ) +
+  labs(
+       #x = "Full Lapse Indicator", y = "Exposure %", 
+       title = "Distribution of Churn by Tenure (Months)") +
+  #guides(fill = guide_legend("Full Lapse Indicator")) +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        #panel.grid.major.y = element_line(color = 'black', linetype = 'dotted'),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank() )
+
+
+box_tenure <- ggplot(data_raw, aes(x = as.factor(data_raw[["Churn"]]), y = data_raw[["tenure"]], fill = as.factor(data_raw[["Churn"]]))) + 
+  geom_boxplot(outlier.colour=NA, alpha = 0.6) +
+  scale_y_continuous(labels = comma, breaks=seq(0, limit_tenure, 5)
+                     #, guide = guide_axis(n.dodge = 2)
+                     ) +
+  coord_cartesian(ylim = c(0, 200)) +
+  theme(legend.title = element_blank(),
+        legend.position = "none"
+        ) +
+  labs(x = "Churn") +
+        #x = "Full Lapse Indicator", y = "API", 
+        #title = "Distribution of Lapse by Premium") + 
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text.x = element_text(size = 8)
+        ) +
+  scale_fill_manual(values=c("#AAD8C8", "#2FB3B6")) +
+  stat_summary(fun = "mean", shape = 4, color = "#303E46")
+  
+
+
+ggr_tenure_den <- ggarrange(den_tenure, box_tenure, widths = c(2.0, 0.7),
+          #labels = c("A", "B", "C"),
+          ncol = 2, nrow = 1)
+
+#dev.new()
+print(ggr_tenure_den)
+
+```
+
+
+## Histogram Plots for Categorical Variable (on same scale)
+
+
+### Gender
+```{r }
+
+
+labels_Gender <- c("Female", "Male")
+
+Gender_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["gender"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["gender"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_Gender) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Gender") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(Gender_hist)
+
+```
+
+
+
+### Senior Citizen Flag
+```{r }
+
+
+labels_SC <- c("Yes", "No")
+
+SC_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["SeniorCitizen_Flag"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["SeniorCitizen_Flag"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_SC) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Senior Citizen Flag") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(SC_hist)
+
+```
+
+
+### Phone Service
+```{r }
+
+
+labels_PS <- c("Yes", "No")
+
+PS_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["PhoneService"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["PhoneService"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_PS) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Phone Service Flag") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(PS_hist)
+
+```
+
+
+### Internet Service
+```{r }
+
+
+labels_IS <- c("DSL", "Fiber optic", "No")
+
+IS_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["InternetService"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["InternetService"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_IS) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Internet Service Flag") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(IS_hist)
+
+```
+
+
+
+### Contract
+```{r }
+
+
+labels_Contract <- c("Monthly", "One Year", "Two Year")
+
+Contract_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["Contract"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["Contract"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_Contract) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Contract Type") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(Contract_hist)
+
+```
+
+
+
+### Paperless Billing
+```{r }
+
+
+labels_PB <- c("Yes", "No")
+
+PB_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["PaperlessBilling"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["PaperlessBilling"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_PB) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Paperless Billing Flag") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(PB_hist)
+
+```
+
+
+### Payment Method
+```{r }
+
+
+labels_PM <- c("Bank Transfer", "Credit Card", "Electronic Cheque", "Mailed Cheque")
+
+PM_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["PaymentMethod"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["PaymentMethod"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_PM, guide = guide_axis(n.dodge = 2)) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Payment Method") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(PM_hist)
+
+```
+
+
+
+### Bundle Flag
+```{r }
+
+
+labels_Bundle <- c("Yes", "No")
+
+Bundle_hist <- ggplot() + 
+  geom_bar(data = data_if, aes(x = as.factor(data_if[["Bundle_Flag"]]), y = ..count../sum(..count..)), fill = "#AAD8C8", alpha = 0.6) +
+    geom_bar(data = data_churn, aes(x = as.factor(data_churn[["Bundle_Flag"]]), y = ..count../sum(..count..)), fill = "#2FB3B6", alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1)) +
+  scale_x_discrete(labels = labels_Bundle) +
+  #scale_fill_brewer(palette = "Pastel1") +
+  #scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+  theme(axis.title = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Churn Distribution by Bundle Flag (Internet + Phone)") +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 9))
+
+print(Bundle_hist)
+
+```
+
+
+#### 4 x 4 - Group 1
+```{r}
+ggr_cat_1 <- ggarrange(Gender_hist, SC_hist, Contract_hist, PM_hist, 
+                       #widths = c(2.0, 0.7),
+                       #labeIP = c("A", "B", "C"),
+                        ncol = 2, nrow = 2)
+
+#dev.new()
+print(ggr_cat_1)
+
+```
+
+
+#### 4 x 4 - Group 2
+```{r}
+ggr_cat_2 <- ggarrange(PS_hist, IS_hist, Bundle_hist, PB_hist, 
+                       #widths = c(2.0, 0.7),
+                       #labeIP = c("A", "B", "C"),
+                        ncol = 2, nrow = 2)
+
+#dev.new()
+print(ggr_cat_2)
+
+```
+
+
+
+## Facet Charts
+
+###  Monthly Charge by Contract Type and Payment Method
+```{r IP Monthly Benefit by Occupation}
+
+
+facet_monthly_charge_1 <- ggplot() + 
+  geom_histogram(data = data_if, aes(x = data_if[["MonthlyCharges"]], y = ..count../sum(..count..), fill = data_if[["Contract"]]), alpha = 0.8, color = NA, binwidth = 10) +
+  scale_fill_manual(values = c("#AAD8C8", "#2FB3B6", "#EFEFD2")) +
+  facet_wrap("PaymentMethod") +
+  scale_x_continuous(labels = comma, breaks = seq(0, limit_prem, 10), 
+                   guide = guide_axis(n.dodge = 2)
+                   ) +
+  scale_y_continuous(labels = percent, breaks=seq(0, 0.1, 0.02)) +
+  theme(legend.title = element_blank(),
+        legend.position = "right"
+        ) +
+  labs(x = "Monthly Charge",
+       title = "Monthly Charge by Contract Type and Payment Method") +
+  theme(
+        panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text.x = element_text(size = 8))
+
+print(facet_monthly_charge_1)
+
+```
+
+
+## Stat2D plot
+
+### Tenure (months) by Contract Type STAT2D plot
+```{r }
+
+labels_y_contract_type <- c("Month-to-Month", 
+                           "One Year", 
+                           "Two Year")
+
+Stat2D_tenure_contract <- ggplot(data_if, aes(x = `tenure`, y = `Contract`)) +
+
+  stat_bin2d(bins = 20) +
+  scale_fill_gradient(low = "#EFEFD2", high = "#F15A24", limits = c(0, 1000)) +
+ scale_x_continuous(labels = comma, breaks=seq(0, 120, 10)
+                     ,guide = guide_axis(n.dodge = 2)
+                     ) +
+ scale_y_discrete(labels = labels_y_contract_type) +
+
+  theme(axis.title = element_blank(),
+        legend.position = "right",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8)
+        ) +
+  labs(title = "Distribution of Contract Type by Tenure (months)") +
+  #guides(fill = guide_legend(title = "Full Lapse")) +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        #panel.grid.major.y = element_line(color = 'black', linetype = 'dotted'),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        #axis.ticks = element_blank() 
+        ) 
+
+print(Stat2D_tenure_contract)
+
+```
+
+
+### Monthly Charges by Contract Type STAT2D plot
+```{r }
+
+labels_y_contract_type <- c("Month-to-Month", 
+                           "One Year", 
+                           "Two Year")
+
+Stat2D_MC_contract <- ggplot(data_if, aes(x = `MonthlyCharges`, y = `Contract`)) +
+
+  stat_bin2d(bins = 20) +
+  scale_fill_gradient(low = "#EFEFD2", high = "#F15A24", limits = c(0, 1000)) +
+ scale_x_continuous(labels = comma, breaks=seq(0, 120, 10)
+                     ,guide = guide_axis(n.dodge = 2)
+                     ) +
+ scale_y_discrete(labels = labels_y_contract_type) +
+
+  theme(axis.title = element_blank(),
+        legend.position = "right",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8)
+        ) +
+  labs(title = "Distribution of Contract Type by Monthly Charges") +
+  #guides(fill = guide_legend(title = "Full Lapse")) +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        #panel.grid.major.y = element_line(color = 'black', linetype = 'dotted'),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        #axis.ticks = element_blank() 
+        ) 
+
+print(Stat2D_MC_contract)
+
+```
+
+
+
+### Tenure (months) by Payment Method STAT2D plot
+
+```{r }
+
+labels_y_payment_method <- c("Bank Transfer", 
+                           "Credit Card", 
+                           "Electronic Cheque",
+                           "Mailed Cheque")
+
+Stat2D_tenure_PM <- ggplot(data_if, aes(x = `tenure`, y = `PaymentMethod`)) +
+
+  stat_bin2d(bins = 20) +
+  scale_fill_gradient(low = "#EFEFD2", high = "#F15A24", limits = c(0, 500)) +
+ scale_x_continuous(labels = comma, breaks=seq(0, 120, 10)
+                     ,guide = guide_axis(n.dodge = 2)
+                     ) +
+ scale_y_discrete(labels = labels_y_payment_method) +
+
+  theme(axis.title = element_blank(),
+        legend.position = "right",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8)
+        ) +
+  labs(title = "Distribution of Payment Method by Tenure (Months)") +
+  #guides(fill = guide_legend(title = "Full Lapse")) +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        #panel.grid.major.y = element_line(color = 'black', linetype = 'dotted'),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        #axis.ticks = element_blank() 
+        ) 
+
+print(Stat2D_tenure_PM)
+
+```
+
+
+
+### Monthly Charges by Payment Method STAT2D plot
+
+```{r }
+
+labels_y_payment_method <- c("Bank Transfer", 
+                           "Credit Card", 
+                           "Electronic Cheque",
+                           "Mailed Cheque")
+
+Stat2D_MC_PM <- ggplot(data_if, aes(x = `MonthlyCharges`, y = `PaymentMethod`)) +
+
+  stat_bin2d(bins = 20) +
+  scale_fill_gradient(low = "#EFEFD2", high = "#F15A24", limits = c(0, 500)) +
+ scale_x_continuous(labels = comma, breaks=seq(0, 120, 10)
+                     ,guide = guide_axis(n.dodge = 2)
+                     ) +
+ scale_y_discrete(labels = labels_y_payment_method) +
+
+  theme(axis.title = element_blank(),
+        legend.position = "right",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8)
+        ) +
+  labs(title = "Distribution of Payment Method by Monthly Charges") +
+  #guides(fill = guide_legend(title = "Full Lapse")) +
+  theme(panel.background = element_rect(fill = '#FFFFFF', color = "#FFFFFF"),
+        panel.grid.major.x = element_blank(),
+        #panel.grid.major.y = element_line(color = 'black', linetype = 'dotted'),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        #axis.ticks = element_blank() 
+        ) 
+
+print(Stat2D_MC_PM)
+
+```
+
+
+### Define a LOOP function for saving plots
+```{r Define a functoin for plotting}
+
+# For discrete values, build continuous later with an IF statement..
+
+plot_dist <- function(var) {
+  g <- ggplot(df_explode, aes(as.factor(df_explode[[var]]), y =..count../sum(..count..), fill = as.factor(df_explode[["Full_Lapse_IND"]]))) + 
+        geom_bar() +
+        scale_y_continuous(labels = scales::percent, breaks=seq(0, 1, 0.1)) +
+        scale_fill_manual(values = c("#AAD8C8", "#2FB3B6")) +
+        theme(axis.title = element_blank()) +
+        theme(legend.title = element_blank()) +
+        labs(title = paste("Lapse Distribution by ", as.character(var))) 
+  
+  print(g)
+    }
+
+```
+
+
+
+#### 2 x 2 - Group 3
+```{r}
+ggr_cat_3 <- ggarrange(PM_hist, Stat2D_MC_PM, 
+                       #widths = c(2.0, 0.7),
+                       #labeIP = c("A", "B", "C"),
+                        ncol = 1, nrow = 2)
+
+#dev.new()
+print(ggr_cat_3)
+
+```
+
+#### 2 x 2 - Group 4
+```{r}
+ggr_cat_4 <- ggarrange(Contract_hist, Stat2D_MC_contract, 
+                       #widths = c(2.0, 0.7),
+                       #labeIP = c("A", "B", "C"),
+                        ncol = 1, nrow = 2)
+
+#dev.new()
+print(ggr_cat_4)
+
+```
+
+
+#### 2 x 2 - Group 5
+```{r}
+ggr_0 <- ggarrange(ggr_prem_den, Contract_hist, Stat2D_MC_contract, facet_monthly_charge_1,
+                       #widths = c(2.0, 0.7, 1.0, 1.0),
+                       #labeIP = c("A", "B", "C"),
+                        ncol = 1, nrow = 4)
+
+#dev.new()
+print(ggr_0)
+
+```
+
+
+#     2 - GLM Fit
+
+
+### Train Test Split
+
+```{r}
+
+y = data_raw$Churn_Flag
+
+
+set.seed(268)
+
+sample_size <- floor(0.7 * nrow(data_raw))
+sample_indi <- sample(seq_len(nrow(data_raw)), size = sample_size)
+
+d_train <- data_raw[sample_indi,]
+d_test <- data_raw[-sample_indi,]
+y_train <- y[sample_indi]
+y_test <- y[-sample_indi]
+
+
+```
+
+### GLM Fit 1 - Base
+```{r}
+
+
+glm_1 <- glm(Churn_Flag ~
+                  
+  tenure
++ MonthlyCharges
+
++ relevel(factor(gender), ref = "Female")
++ relevel(factor(SeniorCitizen_Flag), ref = "Yes")
++ relevel(factor(PhoneService), ref = "No")
++ relevel(factor(InternetService), ref = "DSL")
++ relevel(factor(Contract), ref = "Month-to-month")
++ relevel(factor(PaperlessBilling), ref = "No")
++ relevel(factor(PaymentMethod), ref = "Bank transfer (automatic)")
+
+#+ Partner
+#+ Dependents
+#+ MultipleLines
+#+ OnlineSecurity	
+#+ OnlineBackup 
+#+ DeviceProtection
+#+	TechSupport
+#+	StreamingTV
+#+	StreamingMovies
+
+
+
+
+, data = d_train
+, family = binomial("logit")
+
+)
+
+
+summary(glm_1)
+#write.csv(summary(glm_1)$coefficients, "summary_glm_1_telco_churn.csv")
+
+```
+
+### Model Diagnostics
+
+```{r}
+
+p_train_glm_1 <- predict(glm_1, d_train, type = "response")
+p_test_glm_1  <- predict(glm_1, d_test, type = "response")
+
+mean(y_train)
+mean(p_train_glm_1)
+
+mean(y_test)
+mean(p_test_glm_1)
+
+
+thresh <- quantile(p_train_glm_1, 1 - mean(y_train))
+#thresh_LS
+
+confusionMatrix(factor(p_train_glm_1 > thresh), factor(y_train), positive = "TRUE")
+confusionMatrix(factor(p_test_glm_1 > thresh), factor(y_test), positive = "TRUE")
+
+
+roc(y_train, p_train_glm_1, plot = T, ci = T)
+roc(y_test, p_test_glm_1, plot = T, ci = T)
+
+```
+
+
